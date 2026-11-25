@@ -412,6 +412,7 @@ export class App {
   private refreshInspector() {
     const st = this.state;
     const ev = this.ev;
+    if (this.hoverIdx >= st.buildings.length) this.hoverIdx = -1;
     if (this.paletteHover && this.paletteHover !== this.tool) {
       const key = `p|${this.paletteHover}|${st.month}`;
       if (key === this.lastInspectKey) return;
@@ -549,6 +550,10 @@ export class App {
 
   private afterChange() {
     saveLocal(this.state);
+    // Building indices shift whenever the state changes: drop hover state, the next frame re-picks.
+    this.hoverIdx = -1;
+    this.hoverNeighbor = null;
+    this.view.setHover(-1);
     this.previewKey = '';
     this.lastInspectKey = '';
     this.renderAll();
