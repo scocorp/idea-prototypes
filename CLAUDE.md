@@ -11,7 +11,6 @@ production robustness, but keep the code readable enough to keep building on if 
 - Idea-specific details (design, rules, architecture, how to build/run/test) live in that idea's
   directory, never in this file. This file only indexes them.
 - CI: one workflow per idea in `.github/workflows/`, path-filtered to that idea's directory.
-- Commit trailers / PR text: no model identifiers.
 
 ## Ideas
 
