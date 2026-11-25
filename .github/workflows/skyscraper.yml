@@ -1,0 +1,65 @@
+name: skyscraper
+
+# Builds skyscraper/ into one self-contained HTML file you can download and open from disk.
+# Every run uploads it as the `skyscraper-html` artifact; pushes to main also refresh the
+# `skyscraper-latest` pre-release so there is a stable download link.
+
+on:
+  push:
+    branches: [main]
+    paths: ['skyscraper/**', '.github/workflows/skyscraper.yml']
+  pull_request:
+    paths: ['skyscraper/**', '.github/workflows/skyscraper.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skyscraper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skyscraper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: skyscraper/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: cp dist/index.html dist/skyscraper.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skyscraper-html
+          path: skyscraper/dist/skyscraper.html
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: skyscraper-html
+      - name: Refresh the skyscraper-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete skyscraper-latest --yes --cleanup-tag || true
+          gh release create skyscraper-latest skyscraper.html \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Skyscraper (latest build)" \
+            --notes "Single-file build of skyscraper/ at ${GITHUB_SHA::7}. Download skyscraper.html and open it in a browser. Your tower autosaves in that browser."
