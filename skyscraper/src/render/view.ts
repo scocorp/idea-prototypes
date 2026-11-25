@@ -120,6 +120,22 @@ export class View {
   private readonly sliceMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.06, depthWrite: false });
   private readonly plateMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
   private readonly fieldMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.14, depthWrite: false });
+  private readonly ghostMats = new Map<string, THREE.Material[]>();
+  private readonly lineMats = new Map<number, THREE.LineBasicMaterial>();
+  private readonly carMat = new THREE.MeshBasicMaterial({ color: 0xffd27a });
+  private readonly bridgeMats = {
+    on: { deck: new THREE.MeshLambertMaterial({ color: 0xc8d4e0 }), glass: new THREE.MeshLambertMaterial({ color: 0xa8e0f8, transparent: true, opacity: 0.55, depthWrite: false }) },
+    off: { deck: new THREE.MeshLambertMaterial({ color: 0x8a6a6a }), glass: new THREE.MeshLambertMaterial({ color: 0x806868, transparent: true, opacity: 0.55, depthWrite: false }) },
+  };
+
+  private lineMat(color: number): THREE.LineBasicMaterial {
+    let m = this.lineMats.get(color);
+    if (!m) {
+      m = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
+      this.lineMats.set(color, m);
+    }
+    return m;
+  }
 
   private lens: Lens = 'none';
   private slice: number | null = null;
@@ -616,24 +632,24 @@ export class View {
       const len = nb.gap + 0.1;
       const edge = new THREE.Vector3(x + 0.5 - n / 2 + dir[0]! * 0.5, 0, y + 0.5 - n / 2 + dir[1]! * 0.5);
       const active = this.ev.active[i] === 1 && !!link.stratum;
-      const color = active ? 0xc8d4e0 : 0x8a6a6a;
+      const bm = active ? this.bridgeMats.on : this.bridgeMats.off;
       const g = new THREE.Group();
       g.userData.bridge = true;
       const yb = b.z * LEVEL_H + 0.22;
-      const deck = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial({ color }));
+      const deck = new THREE.Mesh(this.boxGeo, bm.deck);
       const alongX = dir[0] !== 0;
       deck.scale.set(alongX ? len : 0.46, 0.09, alongX ? 0.46 : len);
       deck.position.set(edge.x + (dir[0]! * len) / 2, yb, edge.z + (dir[1]! * len) / 2);
       g.add(deck);
-      const glass = new THREE.MeshLambertMaterial({ color: active ? 0xa8e0f8 : 0x806868, transparent: true, opacity: 0.55, depthWrite: false });
+      const glass = bm.glass;
       for (const s of [-1, 1]) {
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), glass);
+        const rail = new THREE.Mesh(this.boxGeo, glass);
         rail.scale.set(alongX ? len : 0.03, 0.26, alongX ? 0.03 : len);
         rail.position.set(deck.position.x + (alongX ? 0 : s * 0.22), yb + 0.17, deck.position.z + (alongX ? s * 0.22 : 0));
         g.add(rail);
       }
       if (active) {
-        const roof = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), glass);
+        const roof = new THREE.Mesh(this.boxGeo, glass);
         roof.scale.set(alongX ? len : 0.46, 0.03, alongX ? 0.46 : len);
         roof.position.set(deck.position.x, yb + 0.31, deck.position.z);
         g.add(roof);
@@ -653,7 +669,7 @@ export class View {
       const k = `${x},${y}`;
       tops.set(k, Math.max(tops.get(k) ?? 0, b.z));
     });
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffd27a });
+    const mat = this.carMat;
     for (const [k, top] of tops) {
       if (top < 1) continue;
       const [x, y] = k.split(',').map(Number) as [number, number];
@@ -713,21 +729,26 @@ export class View {
       const d = TILES[g.type]!;
       const tint = g.status === 'ok' ? 0xc8ffd0 : g.status === 'idle' ? 0xffd890 : 0xff7070;
       const edge = g.status === 'ok' ? 0x80ffa0 : g.status === 'idle' ? 0xffc040 : 0xff5050;
-      const mats = this.materialsFor(d, true).map((mm) => {
-        const c = (mm as THREE.MeshLambertMaterial).clone();
-        c.transparent = true;
-        c.opacity = g.status === 'bad' ? 0.45 : 0.8;
-        c.color = new THREE.Color(tint);
-        c.depthWrite = false;
-        c.emissiveIntensity = 0;
-        return c;
-      });
+      const gkey = `${g.type}|${g.status}`;
+      let mats = this.ghostMats.get(gkey);
+      if (!mats) {
+        mats = this.materialsFor(d, true).map((mm) => {
+          const c = (mm as THREE.MeshLambertMaterial).clone();
+          c.transparent = true;
+          c.opacity = g.status === 'bad' ? 0.45 : 0.8;
+          c.color = new THREE.Color(tint);
+          c.depthWrite = false;
+          c.emissiveIntensity = 0;
+          return c;
+        });
+        this.ghostMats.set(gkey, mats);
+      }
       const mesh = new THREE.InstancedMesh(this.boxGeo, mats, g.cells.length);
       mesh.frustumCulled = false;
       g.cells.forEach(([x, y], k) => mesh.setMatrixAt(k, cellM(x, y, g.z)));
       mesh.renderOrder = 5;
       this.overlayGroup.add(mesh);
-      const lineMat = new THREE.LineBasicMaterial({ color: edge, transparent: true, opacity: 0.95, depthTest: false });
+      const lineMat = this.lineMat(edge);
       for (const [x, y] of g.cells) {
         const l = new THREE.LineSegments(this.edgeGeo, lineMat);
         l.applyMatrix4(cellM(x, y, g.z, 0.02));
@@ -738,7 +759,7 @@ export class View {
 
     // Hover / selection outlines.
     const outline = (b: Building, color: number) => {
-      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false });
+      const mat = this.lineMat(color);
       for (const [x, y] of b.cells) {
         const l = new THREE.LineSegments(this.edgeGeo, mat);
         l.applyMatrix4(cellM(x, y, b.z, 0.03));
@@ -902,7 +923,7 @@ export class View {
   }
 
   private updateDayNight(dt: number) {
-    if (this.timeMode === 'cycle') this.dayT = (this.dayT + dt / 240) % 1;
+    if (this.timeMode === 'cycle') this.dayT = (this.dayT + dt / 360) % 1;
     else {
       const goal = this.timeMode === 'day' ? 0.5 : 0.0;
       let diff = goal - this.dayT;

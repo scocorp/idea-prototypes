@@ -29,6 +29,8 @@
   (Cesspits, Sewage Works) collect from above. Heat rises from Boilers, Foundries, Geothermal Bores. Lifts
   give access on their level. Relays (pumps, towers, light pipes, lift shafts) only work when fed, so every
   chain starts at a real source.
+- **Adjacency.** Some plans need specific operating neighbours on their level, sharing an edge: a Market
+  needs two occupied homes, a Biogas Digester must touch a working Sewage Works.
 - **Pools**: Labor (laborers), Skill (citizens), Food, Power, Goods. Shared tower-wide, allocated highest
   floor first, then by era, then by age.
 - **Appeal** per cell: +1 per 4 levels, +1 open sky, −1 dark, +2 above the clouds (L16), plus nearby
@@ -49,8 +51,10 @@ Six eras, each unlocked by population and production milestones (see `doc/tiles.
    from above, drains from below: the first real vertical pressure.
 3. **Citizens**: Apartment (L-shape, every cell needs a window, appeal 1, no tenement neighbours),
    Garden, Market, Solar, Boiler, Grow Lamp. Appeal and power arrive; farms can move indoors.
-4. **Metropolis**: Lift, Sewage Works, Pump, Clinic, Foundry, Light Pipe. Infrastructure for height.
-5. **Overcity**: Penthouse, Bathhouse (needs heat from below), Water Tower, Skybridge, Sky Garden.
+4. **Metropolis**: Lift, Sewage Works, Biogas Digester, Pump, Clinic, Foundry (needs heat from a Boiler
+   below), Light Pipe. Infrastructure for height.
+5. **Overcity** (also needs citizen happiness: average apartment appeal ≥ 2): Penthouse, Bathhouse
+   (needs heat from below), Water Tower, Skybridge, Sky Garden.
 6. **Spire**: Sky Villa, Geothermal Bore, Observation Deck, Capsule Stack, Spire (L20+, the crown).
 
 Each era introduces 3 to 6 plans and at most two new systems, so complexity ramps rather than lands.
@@ -61,8 +65,9 @@ Each era introduces 3 to 6 plans and at most two new systems, so complexity ramp
 - Rain Catchers must sit *above* what they water, but whatever they water must not need the sky.
 - Cesspits drain only to L3; tall towers need Sewage Works, which stink up their own floor.
 - Apartments want facade cells and lightwells; tenements and workshops spoil their appeal.
-- Heat for a Bathhouse comes with smoke: put appeal back with the bathhouse itself, or pay for clean
-  geothermal heat at ground level.
+- Heat chains upward: Boiler → Foundry → Bathhouse, each needing the one below. Heat comes with smoke:
+  put appeal back with the bathhouse itself, or pay for clean geothermal heat at ground level.
+- Waste to power: Biogas Digesters must hug a Sewage Works, adding stink where the undercity already is.
 - Every elite needs a servant (Labor) from below; inequality is shown as laborers per elite.
 - Bridges: the same neighbour is labor at one height and prestige at another.
 
@@ -72,11 +77,18 @@ The chronicle diffs the tower before and after each edit: who lost the sun and t
 (always the lowest floors first), milestones, bridges, eras. Each building keeps a short biography shown
 in the inspector ("Y2 Mar: lost the sun. Y3 Jan: stopped (Food shortage)").
 
+## Pacing (from a scripted playthrough on 16×16)
+
+Era 2 after ~8 placements, era 3 after ~25, era 4 after ~57, era 5 after ~107. Ground-floor shanties are
+the first to starve when food runs short, which is the intended story. Eras 5→6 are covered by an
+integration test (`overcity feasibility`) rather than a full playthrough yet.
+
 ## Presentation
 
 Orthographic camera, 45° yaw, 30° pitch, 90° rotation over 0.5 s (Q/E). Cutaway hides levels above a
 chosen one. Lenses recolour by status, light, water, drain, heat, lift or appeal. Ghost placement shows
-the building's field volumes and a forecast. Day/night cycle with lit windows only in operating homes,
+the building's field volumes and a forecast (green operates, amber idle, red invalid); picking a plan
+lights up plates where its coverage needs are met. Drag paints a plan along one level. Day/night cycle with lit windows only in operating homes,
 a cloud deck at L16, smoke from chimneys, lift cars, neighbouring towers that fade when they would block
 the view, bridges reaching into the haze.
 
