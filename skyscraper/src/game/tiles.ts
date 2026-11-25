@@ -85,10 +85,10 @@ export const TILES: Record<string, TileDef> = {
   }),
   market: T({
     id: 'market', name: 'Market', category: 'amenity', shape: 'I2', era: 3,
-    needs: { pool: { labor: 1, goods: 1 } },
+    needs: { pool: { labor: 1, goods: 1 }, adjacent: { homes: true, count: 2, text: 'Needs 2 occupied homes next to it on its level' } },
     emits: [{ field: 'appeal', r: 2, dz: [-1, 1], value: 2 }],
     look: { color: 0xe08a3a, top: 0xa8643a, style: 'shop', prop: 'awning' },
-    blurb: 'Stalls, noodles, gossip. Brings life to the floors around it.',
+    blurb: 'Stalls, noodles, gossip. Lives off the homes beside it and brings life to the floors around.',
   }),
   solar: T({
     id: 'solar', name: 'Solar Array', category: 'power', shape: 'I1', era: 3,
@@ -153,14 +153,14 @@ export const TILES: Record<string, TileDef> = {
   }),
   foundry: T({
     id: 'foundry', name: 'Foundry', category: 'industry', shape: 'I3', era: 4,
-    needs: { pool: { labor: 4, skill: 1, power: 2 } },
+    needs: { heat: true, pool: { labor: 4, skill: 1, power: 2 } },
     makes: { goods: 6 },
     emits: [
       { field: 'heat', r: 1, dz: [1, 3] },
       { field: 'appeal', r: 1, dz: [0, 3], value: -3 },
     ],
     look: { color: 0x5a4a42, top: 0x40342e, style: 'industrial', prop: 'chimneys', glow: 0xff6a20 },
-    blurb: 'Molten metal and real money. Heat and soot climb three floors.',
+    blurb: 'Fed by the boilers below, it melts metal into real money. Its own heat and soot climb three floors.',
   }),
   lightpipe: T({
     id: 'lightpipe', name: 'Light Pipe', category: 'food', shape: 'I1', era: 4,
@@ -169,6 +169,15 @@ export const TILES: Record<string, TileDef> = {
     emits: [{ field: 'pipe', r: 0, dz: [-3, -1] }],
     look: { color: 0xe8d9a8, top: 0xf6d873, style: 'glass', prop: 'dome', glow: 0xffe9a0 },
     blurb: 'Mirrors in a polished shaft: carries sunlight three floors straight down. Chainable.',
+  }),
+
+  digester: T({
+    id: 'digester', name: 'Biogas Digester', category: 'power', shape: 'I1', era: 4,
+    needs: { pool: { labor: 1 }, adjacent: { tiles: ['sewage'], count: 1, text: 'Must touch a working Sewage Works' } },
+    makes: { power: 4 },
+    emits: [{ field: 'appeal', r: 1, dz: [0, 1], value: -2 }],
+    look: { color: 0x5a6a3a, top: 0x4a5a2e, style: 'industrial', prop: 'tanks' },
+    blurb: "The tower's leavings, fermented into power. Must sit against a Sewage Works.",
   }),
 
   // ── Era 5 · Overcity ──────────────────────────────────────────────────────
@@ -313,6 +322,7 @@ export const ERAS: Era[] = [
     n: 5, name: 'Overcity',
     parts: [
       { label: 'Citizens housed', get: citizens, target: 36 },
+      { label: 'Citizen happiness (avg appeal)', get: (s) => s.citizenAppeal, target: 2 },
       { label: 'Highest working level', get: topLevel, target: 8 },
     ],
   },
@@ -320,7 +330,7 @@ export const ERAS: Era[] = [
     n: 6, name: 'Spire',
     parts: [
       { label: 'Elites housed', get: (s) => s.pop.elite, target: 8 },
-      { label: 'Prestige', get: (s) => s.prestige, target: 60 },
+      { label: 'Prestige', get: (s) => s.prestige, target: 50 },
     ],
   },
 ];
@@ -373,6 +383,7 @@ export function describeNeeds(d: TileDef): string[] {
   else if (typeof n.lift === 'number') cov.push(`lift access from L${n.lift}`);
   if (cov.length) out.push(`Needs ${cov.join(', ')}`);
   if (n.appeal !== undefined) out.push(`Appeal ≥ ${n.appeal}`);
+  if (n.adjacent) out.push(n.adjacent.text);
   const pool = Object.entries(n.pool ?? {});
   if (pool.length) out.push('Uses ' + pool.map(([r, v]) => `${v} ${RESOURCE_INFO[r as Resource].label}`).join(', '));
   if (d.relay === 'water') out.push('Must itself be in water to operate');

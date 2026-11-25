@@ -38,6 +38,8 @@ export class App {
 
   private mouse = { x: 0, y: 0, inside: false };
   private drag: { button: number; x: number; y: number; moved: boolean } | null = null;
+  /** Drag-to-paint: while the left button is held with a plan selected, keep placing on one level. */
+  private paint: { z: number; done: Set<string> } | null = null;
   private keys = new Set<string>();
   private hoverIdx = -1;
   private hoverNeighbor: Neighbor | null = null;
@@ -60,7 +62,7 @@ export class App {
         this.refreshInspector();
       },
       lens: (l) => this.setLens(l),
-      rotate: (d) => this.view.rig.rotate(d),
+      rotate: (d) => this.rotate(d),
       slice: (d) => this.changeSlice(d),
       time: () => this.cycleTime(),
       undo: () => this.undo(),
@@ -126,9 +128,26 @@ export class App {
     canvas.addEventListener('pointerdown', (e) => {
       canvas.setPointerCapture(e.pointerId);
       this.drag = { button: e.button, x: e.clientX, y: e.clientY, moved: false };
+      if (e.button === 0 && this.tool && !this.shift) {
+        this.updateHover();
+        const t = this.target;
+        if (t) {
+          this.paint = { z: t.z, done: new Set([`${t.x},${t.y}`]) };
+          this.tryPlace(t.x, t.y, t.z, true, true);
+        }
+      }
     });
     canvas.addEventListener('pointermove', (e) => {
       this.mouse = { x: e.clientX, y: e.clientY, inside: true };
+      if (this.paint) {
+        const c = this.view.pickPlane(e.clientX, e.clientY, this.paint.z);
+        const key = c ? `${c.x},${c.y}` : '';
+        if (c && !this.paint.done.has(key)) {
+          this.paint.done.add(key);
+          this.tryPlace(c.x, c.y, this.paint.z, false, false);
+        }
+        return;
+      }
       if (this.drag) {
         const dx = e.clientX - this.drag.x;
         const dy = e.clientY - this.drag.y;
@@ -145,6 +164,11 @@ export class App {
       const d = this.drag;
       this.drag = null;
       el.style.cursor = '';
+      if (this.paint) {
+        this.paint = null;
+        this.previewKey = '';
+        return;
+      }
       if (!d || d.moved) return;
       if (e.button === 0) this.click();
       else if (e.button === 2) {
@@ -208,10 +232,10 @@ export class App {
         else this.select(null);
         break;
       case 'q':
-        this.view.rig.rotate(-1);
+        this.rotate(-1);
         break;
       case 'e':
-        this.view.rig.rotate(1);
+        this.rotate(1);
         break;
       case 'r':
         this.rot = (this.rot + (e.shiftKey ? 3 : 1)) % 4;
@@ -247,6 +271,16 @@ export class App {
       case 'h':
         this.helpDialog();
         break;
+      case 'home':
+        this.view.frameTower();
+        break;
+      case 'pageup':
+      case 'pagedown': {
+        const rig = this.view.rig;
+        rig.target.y = Math.max(0, Math.min(45, rig.target.y + (k === 'pageup' ? 3 : -3) * LEVEL_H));
+        e.preventDefault();
+        break;
+      }
       case '+':
       case '=':
         this.view.rig.setZoom(this.view.rig.zoomTo * 1.25);
@@ -326,16 +360,17 @@ export class App {
   private preview(type: string, t: Target) {
     const st = this.state;
     const pl = checkPlacement(st, this.ev.world, type, t.x, t.y, t.z, this.rot, this.flip, this.shift);
-    const ghost: GhostSpec = { type, cells: pl.cells, z: t.z, ok: pl.ok };
-    this.view.setGhost(ghost);
     if (!pl.ok) {
-      this.forecast = { placeWhy: pl.why, deltas: [], losses: [], gains: [] };
+      this.view.setGhost({ type, cells: pl.cells, z: t.z, status: 'bad' });
+      this.forecast = { z: t.z, placeWhy: pl.why, deltas: [], losses: [], gains: [] };
       this.view.setFieldRegions([]);
       return;
     }
     const { state: s2, id } = withBuilding(st, type, t.x, t.y, t.z, this.rot, this.flip, pl.replaces);
     const ev2 = evaluate(s2);
-    this.forecast = this.makeForecast(ev2, s2, id, pl.replaces);
+    this.forecast = { ...this.makeForecast(ev2, s2, id, pl.replaces), z: t.z };
+    const ghost: GhostSpec = { type, cells: pl.cells, z: t.z, status: this.forecast.reasons?.length ? 'idle' : 'ok' };
+    this.view.setGhost(ghost);
     this.view.setFieldRegions((TILES[type]!.emits ?? []).map((e) => ({ cells: pl.cells, z: t.z, emission: e })));
   }
 
@@ -405,7 +440,12 @@ export class App {
     const kb = (s: string) => h('kbd', null, s);
     if (this.tool) {
       const d = TILES[this.tool]!;
-      this.hud.hint(`Placing ${d.name}: click to build · `, kb('R'), ' rotate · ', kb('F'), ' flip · hold ', kb('Shift'), ' to replace · ', kb('Esc'), ' / right-click to stop');
+      const needsCover = d.needs.water || d.needs.drain || d.needs.heat || d.needs.lift;
+      const dot = (c: string) => h('span', { style: `color:${c}` }, '■');
+      this.hud.hint(
+        `Placing ${d.name}: click or drag to build · `, kb('R'), ' rotate · ', kb('F'), ' flip · ', kb('Shift'), ' replace · ', kb('Esc'), ' stop',
+        needsCover ? h('span', null, ' · plates: ', dot('#70e890'), ' covered ', dot('#50c8d8'), ' once its source runs ', dot('#f0b840'), ' partly') : null,
+      );
     } else if (this.demolishMode) {
       this.hud.hint('Demolish: click a building with nothing on top · ', kb('Esc'), ' to stop');
     } else {
@@ -418,10 +458,7 @@ export class App {
   private click() {
     if (this.tool) {
       const t = this.target;
-      if (!t) return;
-      const r = place(this.state, this.ev, this.tool, t.x, t.y, t.z, this.rot, this.flip, this.shift);
-      if ('error' in r) this.hud.toast(r.error);
-      else this.commit(r, true);
+      if (t) this.tryPlace(t.x, t.y, t.z, true, true);
       return;
     }
     if (this.demolishMode) {
@@ -429,6 +466,22 @@ export class App {
       return;
     }
     this.select(this.hoverIdx >= 0 ? this.state.buildings[this.hoverIdx]!.id : null);
+  }
+
+  private tryPlace(x: number, y: number, z: number, loud: boolean, pushUndo: boolean): boolean {
+    if (!this.tool) return false;
+    const r = place(this.state, this.ev, this.tool, x, y, z, this.rot, this.flip, this.shift);
+    if ('error' in r) {
+      if (loud) this.hud.toast(r.error);
+      return false;
+    }
+    this.commit(r, true, pushUndo);
+    return true;
+  }
+
+  private rotate(dir: 1 | -1) {
+    this.view.rig.rotate(dir);
+    this.renderViewbar();
   }
 
   private doDemolish(id: number) {
@@ -440,17 +493,23 @@ export class App {
     }
   }
 
-  private commit(r: ActionResult, placed: boolean) {
+  private commit(r: ActionResult, placed: boolean, pushUndo = true) {
     const prev = this.ev;
     const prevEra = this.state.era;
-    this.undoStack.push(this.state);
-    if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
+    if (pushUndo) {
+      this.undoStack.push(this.state);
+      if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
+    }
     this.redoStack = [];
     this.state = r.state;
     this.ev = r.ev;
     const newB = placed ? this.state.buildings[this.state.buildings.length - 1] : undefined;
     this.view.setWorld(this.state, this.ev, { newIds: newB ? [newB.id] : [] });
-    if (newB) this.popups(prev, newB.cells[0]![0], newB.cells[0]![1], newB.z);
+    if (newB) {
+      this.popups(prev, newB.cells[0]![0], newB.cells[0]![1], newB.z);
+      this.view.dust(newB.cells, newB.z);
+      this.sunLossPopups(prev);
+    }
     if (this.state.era > prevEra) {
       const fresh = TILE_LIST.filter((t) => t.era > prevEra && t.era <= this.state.era).map((t) => t.name);
       this.hud.banner(`Era ${this.state.era}: ${ERAS[this.state.era - 1]!.name}`, `New plans: ${fresh.join(', ')}`);
@@ -470,6 +529,22 @@ export class App {
     const dp = this.ev.stats.prestige - prev.stats.prestige;
     if (dp) items.push([`${dp > 0 ? '+' : ''}${dp} ♛`, '#ffd27a']);
     items.slice(0, 5).forEach(([t, c], k) => this.hud.popup(t, p.x + (k % 2 ? 26 : -26) * (k ? 1 : 0), p.y - k * 16, c, k * 90));
+  }
+
+  /** Flag light-hungry buildings that just lost their open sky. */
+  private sunLossPopups(prev: Evaluation) {
+    const n = this.state.size;
+    let k = 0;
+    this.state.buildings.forEach((b, i) => {
+      const pi = prev.byId.get(b.id);
+      if (pi === undefined || !this.ev.defs[i]!.needs.light || k > 6) return;
+      const had = b.cells.some(([x, y]) => (prev.light[(b.z * n + y) * n + x]! & L_SKY) !== 0);
+      const has = b.cells.some(([x, y]) => (this.ev.light[(b.z * n + y) * n + x]! & L_SKY) !== 0);
+      if (had && !has) {
+        const p = this.view.rig.toScreen(this.view.worldOf(b.cells[0]![0], b.cells[0]![1], b.z + 0.5));
+        this.hud.popup('☀ lost', p.x, p.y, '#ffb860', 150 + k++ * 80);
+      }
+    });
   }
 
   private afterChange() {
@@ -508,6 +583,7 @@ export class App {
       this.view.setFieldRegions(this.selectedRegions());
     }
     this.view.setStrataVisible(id === 'skybridge');
+    this.view.setNeedTool(id);
     this.hud.renderPalette(this.state, this.ev, id);
     this.renderViewbar();
     this.refreshInspector();
@@ -657,12 +733,15 @@ export class App {
       h('h2', null, 'How to play'),
       h('table', null,
         row('Click', 'Build the selected plan / pin a building'),
+        row('Drag', 'With a plan selected: paint along that level'),
         row('Shift', 'Hold while placing to replace the building under the cursor'),
         row('R F', 'Rotate / flip the plan'),
         row('Q E', 'Rotate the view 90°'),
-        row('Drag', 'Pan (right or middle drag works while building)'),
+        row('Right-drag', 'Pan (left-drag also pans when no plan is selected)'),
         row('Wheel', 'Zoom'),
         row('WASD', 'Pan'),
+        row('PgUp PgDn', 'Scroll up / down the tower'),
+        row('Home', 'Frame the whole tower'),
         row('[ ] \\', 'Cutaway: hide levels above / show all'),
         row('V', 'Cycle lenses (status, light, water, drain, heat, lift, appeal)'),
         row('X Del', 'Demolish tool / demolish pinned building'),

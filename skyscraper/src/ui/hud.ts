@@ -53,6 +53,7 @@ export interface HudCallbacks {
 }
 
 export interface Forecast {
+  z?: number;
   placeWhy?: string;
   reasons?: Reason[];
   deltas: { text: string; sign: number }[];
@@ -354,7 +355,7 @@ export class Hud {
   }
 
   private forecastNodes(f: Forecast): Node[] {
-    const out: Node[] = [h('div', { class: 'sec' }, 'If built here')];
+    const out: Node[] = [h('div', { class: 'sec' }, f.z !== undefined ? `If built here (L${f.z})` : 'If built here')];
     if (f.placeWhy) {
       out.push(h('div', { class: 'status bad' }, `Can't build: ${f.placeWhy}`));
       return out;

@@ -51,6 +51,7 @@ export type ReasonCode =
   | 'appeal'
   | 'relay'
   | 'bridge'
+  | 'adjacent'
   | `short:${Resource}`;
 
 export interface Reason {
@@ -112,6 +113,42 @@ export function bridgePrestige(nb: Neighbor, s: Stratum): number {
   return s === 'over' ? Math.floor(nb.height / 4) * BRIDGE.overPrestigePerFourFloors : 0;
 }
 
+/** Call fn(cellIndex) for every cell an emission of building b reaches. */
+export function stampRange(n: number, b: Building, e: Emission, fn: (c: number) => void) {
+  const z0 = Math.max(0, b.z + e.dz[0]);
+  const z1 = Math.min(MAX_LEVELS - 1, b.z + e.dz[1]);
+  if (z0 > z1) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of b.cells) {
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+  const x0 = Math.max(0, minX - e.r), x1 = Math.min(n - 1, maxX + e.r);
+  const y0 = Math.max(0, minY - e.r), y1 = Math.min(n - 1, maxY + e.r);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      let near = false;
+      for (const [cx, cy] of b.cells) {
+        if (Math.max(Math.abs(cx - x), Math.abs(cy - y)) <= e.r) { near = true; break; }
+      }
+      if (!near) continue;
+      for (let z = z0; z <= z1; z++) fn((z * n + y) * n + x);
+    }
+  }
+}
+
+/** Coverage of a field if every built emitter were running (for "where could this work" hints). */
+export function potentialCoverage(state: GameState, field: Field): Uint8Array {
+  const n = state.size;
+  const out = new Uint8Array(n * n * MAX_LEVELS);
+  for (const b of state.buildings) {
+    for (const e of TILES[b.type]!.emits ?? []) {
+      if (e.field === field) stampRange(n, b, e, (c) => (out[c] = 1));
+    }
+  }
+  return out;
+}
+
 function meetsLight(need: LightNeed, l: number): boolean {
   if (need === 'sky') return (l & L_SKY) !== 0;
   if (need === 'window') return (l & (L_SKY | L_SIDE | L_PIPE)) !== 0;
@@ -151,28 +188,7 @@ export function evaluate(state: GameState): Evaluation {
   }
 
   // ── Stamping helpers ─────────────────────────────────────────────────────
-  function forEachCellInRange(b: Building, e: Emission, fn: (c: number) => void) {
-    const z0 = Math.max(0, b.z + e.dz[0]);
-    const z1 = Math.min(MAX_LEVELS - 1, b.z + e.dz[1]);
-    if (z0 > z1) return;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const [x, y] of b.cells) {
-      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-    }
-    const x0 = Math.max(0, minX - e.r), x1 = Math.min(n - 1, maxX + e.r);
-    const y0 = Math.max(0, minY - e.r), y1 = Math.min(n - 1, maxY + e.r);
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        let near = false;
-        for (const [cx, cy] of b.cells) {
-          if (Math.max(Math.abs(cx - x), Math.abs(cy - y)) <= e.r) { near = true; break; }
-        }
-        if (!near) continue;
-        for (let z = z0; z <= z1; z++) fn(idx(x, y, z));
-      }
-    }
-  }
+  const forEachCellInRange = (b: Building, e: Emission, fn: (c: number) => void) => stampRange(n, b, e, fn);
 
   // Nuisances count for every built building, operating or not.
   const appealNeg = new Float32Array(NC);
@@ -324,6 +340,19 @@ export function evaluate(state: GameState): Evaluation {
       const a = buildingAppeal(i);
       if (a < need.appeal) out.push({ code: 'appeal', text: `Appeal ${fmt(a)}, needs ${need.appeal}` });
     }
+    if (need.adjacent) {
+      const adj = need.adjacent;
+      const seen = new Set<number>();
+      for (const [x, y] of b.cells) {
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const j = world.at(x + dx, y + dy, b.z);
+          if (j < 0 || j === i || seen.has(j) || !active[j]) continue;
+          const dj = defs[j]!;
+          if ((adj.tiles && adj.tiles.includes(dj.id)) || (adj.homes && dj.residents)) seen.add(j);
+        }
+      }
+      if (seen.size < adj.count) out.push({ code: 'adjacent', text: `${adj.text} (has ${seen.size})` });
+    }
     if (d.relay && !(active[i] ? fed[i] : relayInput(i))) {
       const text =
         d.relay === 'lift'
@@ -426,7 +455,9 @@ export function evaluate(state: GameState): Evaluation {
     total: NB,
     inactive: 0,
     bridges: 0,
+    citizenAppeal: 0,
   };
+  let citizenAppealSum = 0;
   const appeal = new Float32Array(NB);
   const prestige = new Float32Array(NB);
   const makes: Partial<Record<Resource, number>>[] = [];
@@ -444,7 +475,10 @@ export function evaluate(state: GameState): Evaluation {
       addTo(stats.used, poolOf(i), 1);
       stats.activeCount[d.id] = (stats.activeCount[d.id] ?? 0) + 1;
       stats.maxActiveZ = Math.max(stats.maxActiveZ, b.z);
-      if (d.residents) stats.pop[d.residents.cls] += d.residents.n;
+      if (d.residents) {
+        stats.pop[d.residents.cls] += d.residents.n;
+        if (d.residents.cls === 'citizen') citizenAppealSum += appeal[i]! * d.residents.n;
+      }
       let p = 0;
       if (d.prestige) {
         p = d.prestige.base;
@@ -471,6 +505,8 @@ export function evaluate(state: GameState): Evaluation {
       for (const r of reasons[i]!) if (r.code.startsWith('short:')) stats.short[r.code.slice(6) as Resource]++;
     }
   }
+
+  stats.citizenAppeal = stats.pop.citizen ? Math.round((citizenAppealSum / stats.pop.citizen) * 10) / 10 : 0;
 
   // Per-cell light and appeal for lenses and previews.
   const appealCell = new Float32Array(NC);

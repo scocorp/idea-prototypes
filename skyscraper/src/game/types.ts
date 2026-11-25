@@ -64,7 +64,8 @@ export type PropKind =
   | 'vent'
   | 'cross'
   | 'pit'
-  | 'bore';
+  | 'bore'
+  | 'tanks';
 
 export interface Stats {
   pop: Record<SocialClass, number>;
@@ -82,6 +83,8 @@ export interface Stats {
   total: number;
   inactive: number;
   bridges: number;
+  /** Average appeal of operating citizen homes, weighted by residents (0 if none). */
+  citizenAppeal: number;
 }
 
 export interface TileDef {
@@ -114,6 +117,11 @@ export interface TileDef {
     lift?: boolean | number;
     appeal?: number;
     pool?: Partial<Record<Resource, number>>;
+    /**
+     * Neighbours on the same level that share an edge with the footprint. Counts distinct
+     * operating buildings matching `tiles` (ids) or `homes` (any operating housing).
+     */
+    adjacent?: { tiles?: string[]; homes?: boolean; count: number; text: string };
   };
   makes?: Partial<Record<Resource, number>>;
   residents?: { cls: SocialClass; n: number };

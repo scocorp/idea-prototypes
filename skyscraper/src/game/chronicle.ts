@@ -82,6 +82,7 @@ const STOPPED: Record<string, (list: string) => string> = {
   appeal: (l) => `${cap(l)} lost its appeal; the residents moved out.`,
   relay: (l) => `${cap(l)} stopped working.`,
   bridge: (l) => `${cap(l)} lost its link.`,
+  adjacent: (l) => `${cap(l)} lost the neighbours it depends on.`,
 };
 
 const firstCell = (b: Building): [number, number, number] => [b.cells[0]![0], b.cells[0]![1], b.z];

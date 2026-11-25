@@ -31,7 +31,7 @@ Unlocked by: Laborers housed ≥ 50, Goods made ≥ 2, Highest working level ≥
 |---|---|---|---|---|
 | **Apartment** (`apartment`) | L | L1 or higher | Light: a window (open side or sky)<br>Needs water, drain, lift access from L5<br>Appeal ≥ 1<br>Uses 2 Food, 1 Goods | Makes 3 Skill<br>Houses 9 citizens<br>Prestige 1 |
 | **Garden** (`garden`) | 1×1 | – | Light: open sky<br>Uses 1 Labor | +2 Appeal: 1 tile around, 1 down to 1 up |
-| **Market** (`market`) | 1×2 | – | Uses 1 Labor, 1 Goods | +2 Appeal: 2 tiles around, 1 down to 1 up |
+| **Market** (`market`) | 1×2 | – | Needs 2 occupied homes next to it on its level<br>Uses 1 Labor, 1 Goods | +2 Appeal: 2 tiles around, 1 down to 1 up |
 | **Solar Array** (`solar`) | 1×1 | – | Light: open sky | Makes 3 Power |
 | **Boiler House** (`boiler`) | 1×1 | – | Uses 2 Labor | Makes 4 Power<br>Heat: this column, 1 to 2 up<br>-2 Appeal: 1 tile around, same level to 2 up |
 | **Grow Lamp** (`growlamp`) | 1×1 | – | Uses 1 Power | Grow light: 1 tile around, same level |
@@ -46,12 +46,13 @@ Unlocked by: Citizens housed ≥ 18, Power made ≥ 6.
 | **Sewage Works** (`sewage`) | 2×2 | – | Uses 2 Labor, 1 Skill, 1 Power | Drain: 2 tiles around, 1 to 8 up<br>-3 Appeal: 1 tile around, same level to 1 up |
 | **Pump Station** (`pump`) | 1×1 | – | Uses 2 Power<br>Must itself be in water to operate | Water: 1 tile around, 1 to 6 up |
 | **Clinic** (`clinic`) | 1×2 | – | Uses 2 Skill, 1 Power | +3 Appeal: 3 tiles around, 2 down to 2 up |
-| **Foundry** (`foundry`) | 1×3 | – | Uses 4 Labor, 1 Skill, 2 Power | Makes 6 Goods<br>Heat: 1 tile around, 1 to 3 up<br>-3 Appeal: 1 tile around, same level to 3 up |
+| **Foundry** (`foundry`) | 1×3 | – | Needs heat from below<br>Uses 4 Labor, 1 Skill, 2 Power | Makes 6 Goods<br>Heat: 1 tile around, 1 to 3 up<br>-3 Appeal: 1 tile around, same level to 3 up |
 | **Light Pipe** (`lightpipe`) | 1×1 | – | Must itself be lit by open sky or a Light Pipe above | Piped sun: this column, 1 to 3 down |
+| **Biogas Digester** (`digester`) | 1×1 | – | Must touch a working Sewage Works<br>Uses 1 Labor | Makes 4 Power<br>-2 Appeal: 1 tile around, same level to 1 up |
 
 ## Era 5: Overcity
 
-Unlocked by: Citizens housed ≥ 36, Highest working level ≥ 8.
+Unlocked by: Citizens housed ≥ 36, Citizen happiness (avg appeal) ≥ 2, Highest working level ≥ 8.
 
 | Tile | Shape | Placement | Needs | Provides |
 |---|---|---|---|---|
@@ -63,7 +64,7 @@ Unlocked by: Citizens housed ≥ 36, Highest working level ≥ 8.
 
 ## Era 6: Spire
 
-Unlocked by: Elites housed ≥ 8, Prestige ≥ 60.
+Unlocked by: Elites housed ≥ 8, Prestige ≥ 50.
 
 | Tile | Shape | Placement | Needs | Provides |
 |---|---|---|---|---|

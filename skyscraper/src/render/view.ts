@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { CLOUD_LEVEL, MAX_LEVELS, STRATA } from '../game/config.ts';
-import { L_LAMP, L_PIPE, L_SIDE, L_SKY, type Evaluation } from '../game/evaluate.ts';
+import { L_LAMP, L_PIPE, L_SIDE, L_SKY, potentialCoverage, type Evaluation } from '../game/evaluate.ts';
 import { hash32, mulberry32 } from '../game/rng.ts';
 import { FIELD_INFO, TILES } from '../game/tiles.ts';
 import type { Building, Emission, Field, GameState, Neighbor, PropKind, TileDef } from '../game/types.ts';
@@ -19,7 +19,8 @@ export interface GhostSpec {
   type: string;
   cells: [number, number][];
   z: number;
-  ok: boolean;
+  /** ok = would operate, idle = can build but would not operate, bad = cannot build. */
+  status: 'ok' | 'idle' | 'bad';
 }
 
 export interface FieldRegion {
@@ -44,8 +45,31 @@ interface Puff {
   age: number;
   life: number;
   vx: number;
+  vy: number;
   vz: number;
   grow: number;
+  size: number;
+  alpha: number;
+}
+
+/** A tiny gull silhouette, wings up (0) or down (1). */
+function birdTexture(frame: number): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = 32;
+  c.height = 16;
+  const g = c.getContext('2d')!;
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 2.2;
+  g.lineCap = 'round';
+  g.beginPath();
+  const wy = frame === 0 ? 3 : 12;
+  g.moveTo(2, wy);
+  g.quadraticCurveTo(9, frame === 0 ? 2 : 13, 16, 9);
+  g.quadraticCurveTo(23, frame === 0 ? 2 : 13, 30, wy);
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
 /** White disc whose alpha fades to 0 at the rim, so the street block floats in the haze. */
@@ -80,6 +104,8 @@ export class View {
   private readonly cityGroup = new THREE.Group();
   private readonly fxGroup = new THREE.Group();
   private readonly lensGroup = new THREE.Group();
+  private readonly needGroup = new THREE.Group();
+  private needTool: string | null = null;
 
   private readonly boxGeo = new THREE.BoxGeometry(1, 1, 1);
   private readonly edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
@@ -112,6 +138,9 @@ export class View {
   private puffs: Puff[] = [];
   private emitters: { pos: THREE.Vector3; color: number; acc: number; rate: number }[] = [];
   private liftCars: { mesh: THREE.Mesh; top: number; phase: number; speed: number }[] = [];
+  private birds: { sprite: THREE.Sprite; angle: number; radius: number; dy: number; speed: number; phase: number }[] = [];
+  private birdTex: THREE.Texture[] = [];
+  private summit = new THREE.Vector3(0, 2, 0);
   private readonly puffTex = puffTexture();
   private ground: THREE.Mesh | null = null;
 
@@ -127,7 +156,7 @@ export class View {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 0);
     container.appendChild(this.renderer.domElement);
-    this.scene.add(this.towerGroup, this.propGroup, this.lensGroup, this.overlayGroup, this.cityGroup, this.fxGroup);
+    this.scene.add(this.towerGroup, this.propGroup, this.lensGroup, this.needGroup, this.overlayGroup, this.cityGroup, this.fxGroup);
     this.scene.add(this.hemi, this.key, this.key.target);
     this.scene.fog = new THREE.Fog(0xcfe0ea, 520, 640);
     this.resize();
@@ -150,9 +179,8 @@ export class View {
     this.n = state.size;
     if (fresh) {
       this.buildCity();
-      this.rig.target.set(0, 3, 0);
       this.rig.viewHeight = this.n * 1.15 + 6;
-      this.rig.zoom = this.rig.zoomTo = 1.15;
+      this.frameTower(true);
       const near = 500 + this.n * 0.6;
       (this.scene.fog as THREE.Fog).near = near;
       (this.scene.fog as THREE.Fog).far = near + 46;
@@ -160,6 +188,16 @@ export class View {
     }
     for (const id of opts.newIds ?? []) this.anims.set(id, this.clock);
     this.rebuild();
+  }
+
+  /** Centre and zoom so the whole tower fits. */
+  frameTower(instant = false) {
+    const top = this.ev ? Math.max(0, this.ev.stats.maxZ + 1) : 0;
+    const need = 0.866 * top * LEVEL_H + 0.707 * this.n + 4;
+    const zoom = THREE.MathUtils.clamp(this.rig.viewHeight / need, 0.3, 1.15);
+    this.rig.target.set(0, Math.max(1.5, top * LEVEL_H * 0.5), 0);
+    this.rig.setZoom(zoom);
+    if (instant) this.rig.zoom = zoom;
   }
 
   setLens(lens: Lens) {
@@ -170,6 +208,23 @@ export class View {
   setSlice(level: number | null) {
     this.slice = level;
     this.rebuild();
+  }
+
+  /** Show where a plan's coverage needs (water, drain, heat, lift) are met on each column's next free cell. */
+  setNeedTool(type: string | null) {
+    this.needTool = type;
+    this.buildNeedPlates();
+  }
+
+  /** Cell under the cursor on the floor plane of level z (for drag-painting a level). */
+  pickPlane(clientX: number, clientY: number, z: number): { x: number; y: number } | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ray = this.rig.ray(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    if (Math.abs(ray.direction.y) < 1e-6) return null;
+    const t = (z * LEVEL_H - ray.origin.y) / ray.direction.y;
+    const x = Math.floor(ray.origin.x + ray.direction.x * t + this.n / 2);
+    const y = Math.floor(ray.origin.z + ray.direction.z * t + this.n / 2);
+    return x >= 0 && y >= 0 && x < this.n && y < this.n ? { x, y } : null;
   }
 
   setGhost(g: GhostSpec | null) {
@@ -217,6 +272,21 @@ export class View {
     const meshes = this.neighborMeshes.filter((m) => m.opacity > 0.5).map((m) => m.mesh);
     const hit = rc.intersectObjects(meshes, false)[0];
     return hit ? (this.neighborMeshes.find((m) => m.mesh === hit.object)?.nb ?? null) : null;
+  }
+
+  /** A little puff of dust around a freshly placed building. */
+  dust(cells: [number, number][], z: number) {
+    for (const [x, y] of cells) {
+      for (let k = 0; k < 4; k++) {
+        if (this.puffs.length > 260) return;
+        const a = Math.random() * Math.PI * 2;
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, color: 0xe8e0d0, transparent: true, opacity: 0, depthWrite: false }));
+        s.position.set(x + 0.5 - this.n / 2 + Math.cos(a) * 0.45, z * LEVEL_H + 0.08, y + 0.5 - this.n / 2 + Math.sin(a) * 0.45);
+        s.scale.setScalar(0.2);
+        this.fxGroup.add(s);
+        this.puffs.push({ sprite: s, age: 0, life: 0.7 + Math.random() * 0.3, vx: Math.cos(a) * 0.9, vy: 0.25, vz: Math.sin(a) * 0.9, grow: 0.35, size: 0.2, alpha: 0.7 });
+      }
+    }
   }
 
   worldOf(x: number, y: number, z: number): THREE.Vector3 {
@@ -346,10 +416,19 @@ export class View {
     }
     if (lensOn) this.buildPlates();
     else this.buildProps();
+    this.buildNeedPlates();
     this.buildBridges();
     this.buildLifts();
     this.rebuildOverlay();
-    void n;
+    let top = -1;
+    B.forEach((b) => {
+      if (b.z > top) {
+        top = b.z;
+        const [x, y] = b.cells[0]!;
+        this.summit.set(x + 0.5 - n / 2, (b.z + 1) * LEVEL_H, y + 0.5 - n / 2);
+      }
+    });
+    if (top < 0) this.summit.set(0, 1, 0);
   }
 
   private lensColor(i: number, x: number, y: number, z: number): THREE.Color {
@@ -411,6 +490,48 @@ export class View {
       mesh.setColorAt(k, it.c);
     });
     this.lensGroup.add(mesh);
+  }
+
+  private buildNeedPlates() {
+    for (const c of [...this.needGroup.children]) {
+      this.needGroup.remove(c);
+      if (c instanceof THREE.InstancedMesh) c.dispose();
+    }
+    const d = this.needTool ? TILES[this.needTool] : undefined;
+    if (!d || !this.state || this.lens !== 'none') return;
+    const ev = this.ev;
+    const n = this.n;
+    const items: { m: THREE.Matrix4; c: THREE.Color }[] = [];
+    const potential: Partial<Record<Field, Uint8Array>> = {};
+    for (const f of ['water', 'drain', 'heat', 'lift'] as const) potential[f] = potentialCoverage(this.state, f);
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const z = ev.world.top(x, y) + 1;
+        if (z >= MAX_LEVELS || (this.slice !== null && z > this.slice + 1)) continue;
+        if (d.place?.ground && z !== 0) continue;
+        if (d.place?.minZ !== undefined && z < d.place.minZ) continue;
+        const want: Field[] = [];
+        if (d.needs.water) want.push('water');
+        if (d.needs.drain) want.push('drain');
+        if (d.needs.heat) want.push('heat');
+        if (d.needs.lift === true || (typeof d.needs.lift === 'number' && z >= d.needs.lift)) want.push('lift');
+        if (!want.length) continue;
+        const idx = (z * n + y) * n + x;
+        const live = want.filter((f) => ev.fields[f][idx] === 1).length;
+        const maybe = want.filter((f) => ev.fields[f][idx] === 1 || potential[f]![idx] === 1).length;
+        if (!maybe) continue;
+        const c = new THREE.Color(live === want.length ? 0x70e890 : maybe === want.length ? 0x50c8d8 : 0xf0b840);
+        items.push({ m: new THREE.Matrix4().makeScale(0.8, 0.02, 0.8).setPosition(x + 0.5 - n / 2, z * LEVEL_H + 0.014, y + 0.5 - n / 2), c });
+      }
+    }
+    if (!items.length) return;
+    const mesh = new THREE.InstancedMesh(this.boxGeo, this.plateMat, items.length);
+    mesh.frustumCulled = false;
+    items.forEach((it, k) => {
+      mesh.setMatrixAt(k, it.m);
+      mesh.setColorAt(k, it.c);
+    });
+    this.needGroup.add(mesh);
   }
 
   private buildProps() {
@@ -590,11 +711,13 @@ export class View {
     if (this.ghost) {
       const g = this.ghost;
       const d = TILES[g.type]!;
+      const tint = g.status === 'ok' ? 0xc8ffd0 : g.status === 'idle' ? 0xffd890 : 0xff7070;
+      const edge = g.status === 'ok' ? 0x80ffa0 : g.status === 'idle' ? 0xffc040 : 0xff5050;
       const mats = this.materialsFor(d, true).map((mm) => {
         const c = (mm as THREE.MeshLambertMaterial).clone();
         c.transparent = true;
-        c.opacity = g.ok ? 0.8 : 0.45;
-        c.color = new THREE.Color(g.ok ? 0xc8ffd0 : 0xff7070);
+        c.opacity = g.status === 'bad' ? 0.45 : 0.8;
+        c.color = new THREE.Color(tint);
         c.depthWrite = false;
         c.emissiveIntensity = 0;
         return c;
@@ -604,7 +727,7 @@ export class View {
       g.cells.forEach(([x, y], k) => mesh.setMatrixAt(k, cellM(x, y, g.z)));
       mesh.renderOrder = 5;
       this.overlayGroup.add(mesh);
-      const lineMat = new THREE.LineBasicMaterial({ color: g.ok ? 0x80ffa0 : 0xff5050, transparent: true, opacity: 0.95, depthTest: false });
+      const lineMat = new THREE.LineBasicMaterial({ color: edge, transparent: true, opacity: 0.95, depthTest: false });
       for (const [x, y] of g.cells) {
         const l = new THREE.LineSegments(this.edgeGeo, lineMat);
         l.applyMatrix4(cellM(x, y, g.z, 0.02));
@@ -728,6 +851,17 @@ export class View {
       this.clouds.push(c);
       this.fxGroup.add(s);
     }
+
+    // A small flock that circles whatever is highest.
+    for (const b of this.birds) this.fxGroup.remove(b.sprite);
+    this.birds = [];
+    if (!this.birdTex.length) this.birdTex = [birdTexture(0), birdTexture(1)];
+    for (let i = 0; i < 7; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.birdTex[0], color: 0x2a2a30, transparent: true, depthWrite: false }));
+      s.scale.set(0.42, 0.21, 1);
+      this.fxGroup.add(s);
+      this.birds.push({ sprite: s, angle: rand() * Math.PI * 2, radius: 1.6 + rand() * 2.8, dy: 1.4 + rand() * 1.8, speed: (0.35 + rand() * 0.25) * (i % 3 ? 1 : -1), phase: rand() * 10 });
+    }
   }
 
   // ── Per-frame ──────────────────────────────────────────────────────────────
@@ -741,6 +875,7 @@ export class View {
     this.updateClouds(dt);
     this.updateSmoke(dt);
     this.updateLifts();
+    this.updateBirds(dt);
     this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -843,7 +978,7 @@ export class View {
         s.position.copy(e.pos);
         s.scale.setScalar(0.18);
         this.fxGroup.add(s);
-        this.puffs.push({ sprite: s, age: 0, life: 2.6 + Math.random(), vx: (Math.random() - 0.5) * 0.12 + 0.12, vz: (Math.random() - 0.5) * 0.12, grow: 0.5 + Math.random() * 0.3 });
+        this.puffs.push({ sprite: s, age: 0, life: 2.6 + Math.random(), vx: (Math.random() - 0.5) * 0.12 + 0.12, vy: 0.55, vz: (Math.random() - 0.5) * 0.12, grow: 0.5 + Math.random() * 0.3, size: 0.18, alpha: 0.5 });
       }
       if (e.acc > 1) e.acc = 1;
     }
@@ -859,9 +994,28 @@ export class View {
       }
       p.sprite.position.x += p.vx * dt;
       p.sprite.position.z += p.vz * dt;
-      p.sprite.position.y += (0.55 - t * 0.2) * dt;
-      p.sprite.scale.setScalar(0.18 + t * p.grow);
-      p.sprite.material.opacity = 0.5 * (1 - t) * Math.min(1, t * 6);
+      p.sprite.position.y += p.vy * (1 - t * 0.4) * dt;
+      p.sprite.scale.setScalar(p.size + t * p.grow);
+      p.sprite.material.opacity = p.alpha * (1 - t) * Math.min(1, t * 6);
+    }
+  }
+
+  private updateBirds(dt: number) {
+    const night = this.nightFactor > 0.6;
+    for (const b of this.birds) {
+      b.angle += b.speed * dt;
+      const flap = Math.floor((this.clock * 7 + b.phase) % 2);
+      const mat = b.sprite.material as THREE.SpriteMaterial;
+      if (mat.map !== this.birdTex[flap]) {
+        mat.map = this.birdTex[flap]!;
+        mat.needsUpdate = true;
+      }
+      b.sprite.visible = !night && this.slice === null;
+      b.sprite.position.set(
+        this.summit.x + Math.cos(b.angle) * b.radius,
+        this.summit.y + b.dy + Math.sin(this.clock * 0.9 + b.phase) * 0.25,
+        this.summit.z + Math.sin(b.angle) * b.radius,
+      );
     }
   }
 

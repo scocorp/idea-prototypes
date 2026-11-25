@@ -191,6 +191,17 @@ function build(kind: PropKind): PropModel {
         glow: null,
         stretch: true,
       };
+    case 'tanks':
+      return {
+        base: merge([
+          cyl(0.17, 0.17, 0.3, 0x7a8a4a, -0.18, 0.15, -0.1, 12),
+          dome(0.17, 0x8a9a5a, 0.3).translate(-0.18, 0, -0.1),
+          cyl(0.14, 0.14, 0.24, 0x6a7a3e, 0.2, 0.12, 0.15, 12),
+          dome(0.14, 0x7a8a4a, 0.24).translate(0.2, 0, 0.15),
+          box(0.45, 0.04, 0.04, 0x505848, 0.01, 0.2, 0.02, 0, 0.7),
+        ]),
+        glow: merge([ball(0.035, 0x90ff60, 0.2, 0.42, 0.15, 0)]),
+      };
     case 'bore': {
       const parts: G[] = [];
       for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {

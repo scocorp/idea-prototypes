@@ -81,6 +81,7 @@ button { font: inherit; color: inherit; }
   background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 6px; cursor: pointer;
 }
 .tile:hover { background: rgba(255, 255, 255, 0.06); }
+.tile:focus { outline: none; }
 .tile.on { background: rgba(255, 210, 122, 0.14); border-color: rgba(255, 210, 122, 0.55); }
 .tile.locked { opacity: 0.38; cursor: help; }
 .tile canvas { flex: none; width: 30px; height: 30px; }

@@ -259,3 +259,31 @@ describe('overcity feasibility', () => {
     assert.ok(ev.stats.prestige >= 7, `prestige ${ev.stats.prestige}`);
   });
 });
+
+describe('adjacency and heat', () => {
+  test('a market needs two operating homes beside it', () => {
+    const good = build([...STARTER, ['market', 3, 1, 0]]);
+    assert.ok(!find(good, 'market', 3, 1, 0).reasons.includes('adjacent'));
+    const lonely = build([...STARTER, ['market', 4, 3, 0]]);
+    assert.ok(find(lonely, 'market', 4, 3, 0).reasons.includes('adjacent'));
+  });
+
+  test('a foundry needs heat rising from a boiler below', () => {
+    // The starter settlement supplies the labor that keeps the boiler lit.
+    const r = build([
+      ...STARTER,
+      ['shanty', 5, 0, 0], ['boiler', 6, 0, 0], ['shanty', 7, 0, 0], ['foundry', 6, 0, 1],
+      ['shanty', 5, 6, 0], ['shanty', 6, 6, 0], ['shanty', 7, 6, 0], ['foundry', 6, 6, 1],
+    ]);
+    assert.equal(find(r, 'boiler', 6, 0, 0).active, true);
+    assert.ok(!find(r, 'foundry', 6, 0, 1).reasons.includes('heat'));
+    assert.ok(find(r, 'foundry', 6, 6, 1).reasons.includes('heat'));
+  });
+
+  test('a digester must touch a working sewage works', () => {
+    const r = build([['sewage', 0, 0, 0], ['digester', 2, 0, 0], ['digester', 5, 5, 0]]);
+    assert.ok(find(r, 'digester', 5, 5, 0).reasons.includes('adjacent'));
+    // The sewage works itself is idle here (no labor/skill/power), so even the touching one fails.
+    assert.ok(find(r, 'digester', 2, 0, 0).reasons.includes('adjacent'));
+  });
+});
